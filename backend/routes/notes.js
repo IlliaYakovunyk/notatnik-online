@@ -257,4 +257,47 @@ router.get('/stats/summary', (req, res) => {
   });
 });
 
+// Debug endpoint
+router.get('/debug', (req, res) => {
+  const userId = req.user.id;
+  const sql = 'SELECT id, title, content FROM notes WHERE user_id = ?';
+  
+  db.all(sql, [userId], (err, notatki) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    
+    console.log('🐛 DEBUG - Wszystkie notatki:', notatki);
+    res.json({ success: true, notatki: notatki, count: notatki?.length || 0 });
+  });
+});
+
+// Wyszukiwanie notatek  
+router.get('/search', (req, res) => {
+  const userId = req.user.id;
+  const searchTerm = req.query.q;
+  
+  console.log('🔍 Wyszukiwanie:', searchTerm);
+  
+  if (!searchTerm || searchTerm.trim().length < 2) {
+    return res.status(400).json({
+      success: false,
+      message: 'Wyszukiwanie wymaga co najmniej 2 znaków'
+    });
+  }
+  
+  const sql = 'SELECT id, title, content, created_at, updated_at FROM notes WHERE user_id = ? AND (title LIKE ? OR content LIKE ?) ORDER BY updated_at DESC';
+  const wzor = `%${searchTerm}%`;
+  
+  db.all(sql, [userId, wzor, wzor], (err, notatki) => {
+    if (err) {
+      console.error('Błąd wyszukiwania:', err);
+      return res.status(500).json({ success: false, message: 'Błąd wyszukiwania' });
+    }
+    
+    console.log('📋 Znaleziono:', notatki?.length || 0);
+    res.json({ success: true, results: notatki || [], count: notatki?.length || 0 });
+  });
+});
+
 module.exports = router;
