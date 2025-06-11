@@ -7,6 +7,91 @@ const router = express.Router();
 // Wszystkie routing notes wymagają autoryzacji
 router.use(authenticateToken);
 
+// WAŻNE: Trasy wyszukiwania muszą być PRZED trasą /:id
+// Wyszukiwanie notatek - PRZESUNIĘTE NA GÓRĘ
+router.get('/search', (req, res) => {
+  const userId = req.user.id;
+  const searchTerm = req.query.q;
+  
+  console.log('🔍 Wyszukiwanie:', searchTerm, 'dla użytkownika:', userId);
+  
+  if (!searchTerm || searchTerm.trim().length < 2) {
+    return res.status(400).json({
+      success: false,
+      message: 'Wyszukiwanie wymaga co najmniej 2 znaków'
+    });
+  }
+  
+  const sql = `
+    SELECT id, title, content, created_at, updated_at 
+    FROM notes 
+    WHERE user_id = ? AND (title LIKE ? OR content LIKE ?) 
+    ORDER BY updated_at DESC
+  `;
+  const wzor = `%${searchTerm}%`;
+  
+  db.all(sql, [userId, wzor, wzor], (err, notatki) => {
+    if (err) {
+      console.error('Błąd wyszukiwania:', err);
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Błąd wyszukiwania' 
+      });
+    }
+    
+    console.log('📋 Znaleziono:', notatki?.length || 0, 'notatek');
+    res.json({ 
+      success: true, 
+      results: notatki || [], 
+      count: notatki?.length || 0 
+    });
+  });
+});
+
+// Statystyki użytkownika - TAKŻE PRZED /:id
+router.get('/stats/summary', (req, res) => {
+  const userId = req.user.id;
+  
+  const sql = `
+    SELECT 
+      COUNT(*) as total_notes,
+      COUNT(CASE WHEN DATE(created_at) = DATE('now') THEN 1 END) as notes_today,
+      COUNT(CASE WHEN DATE(created_at) >= DATE('now', '-7 days') THEN 1 END) as notes_this_week
+    FROM notes 
+    WHERE user_id = ?
+  `;
+  
+  db.get(sql, [userId], (err, stats) => {
+    if (err) {
+      console.error('Błąd pobierania statystyk:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Błąd pobierania statystyk'
+      });
+    }
+    
+    res.json({
+      success: true,
+      stats: stats || { total_notes: 0, notes_today: 0, notes_this_week: 0 }
+    });
+  });
+});
+
+// Debug endpoint - TAKŻE PRZED /:id
+router.get('/debug', (req, res) => {
+  const userId = req.user.id;
+  const sql = 'SELECT id, title, content FROM notes WHERE user_id = ?';
+  
+  db.all(sql, [userId], (err, notatki) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    
+    console.log('🐛 DEBUG - Wszystkie notatki:', notatki);
+    res.json({ success: true, notatki: notatki, count: notatki?.length || 0 });
+  });
+});
+
 // Pobierz wszystkie notatki użytkownika
 router.get('/', (req, res) => {
   const userId = req.user.id;
@@ -35,7 +120,7 @@ router.get('/', (req, res) => {
   });
 });
 
-// Pobierz konkretną notatkę
+// Pobierz konkretną notatkę - TERAZ W ODPOWIEDNIM MIEJSCU
 router.get('/:id', (req, res) => {
   const noteId = req.params.id;
   const userId = req.user.id;
@@ -225,78 +310,6 @@ router.delete('/:id', (req, res) => {
         deletedNoteId: noteId
       });
     });
-  });
-});
-
-// Statystyki użytkownika
-router.get('/stats/summary', (req, res) => {
-  const userId = req.user.id;
-  
-  const sql = `
-    SELECT 
-      COUNT(*) as total_notes,
-      COUNT(CASE WHEN DATE(created_at) = DATE('now') THEN 1 END) as notes_today,
-      COUNT(CASE WHEN DATE(created_at) >= DATE('now', '-7 days') THEN 1 END) as notes_this_week
-    FROM notes 
-    WHERE user_id = ?
-  `;
-  
-  db.get(sql, [userId], (err, stats) => {
-    if (err) {
-      console.error('Błąd pobierania statystyk:', err);
-      return res.status(500).json({
-        success: false,
-        message: 'Błąd pobierania statystyk'
-      });
-    }
-    
-    res.json({
-      success: true,
-      stats: stats || { total_notes: 0, notes_today: 0, notes_this_week: 0 }
-    });
-  });
-});
-
-// Debug endpoint
-router.get('/debug', (req, res) => {
-  const userId = req.user.id;
-  const sql = 'SELECT id, title, content FROM notes WHERE user_id = ?';
-  
-  db.all(sql, [userId], (err, notatki) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    
-    console.log('🐛 DEBUG - Wszystkie notatki:', notatki);
-    res.json({ success: true, notatki: notatki, count: notatki?.length || 0 });
-  });
-});
-
-// Wyszukiwanie notatek  
-router.get('/search', (req, res) => {
-  const userId = req.user.id;
-  const searchTerm = req.query.q;
-  
-  console.log('🔍 Wyszukiwanie:', searchTerm);
-  
-  if (!searchTerm || searchTerm.trim().length < 2) {
-    return res.status(400).json({
-      success: false,
-      message: 'Wyszukiwanie wymaga co najmniej 2 znaków'
-    });
-  }
-  
-  const sql = 'SELECT id, title, content, created_at, updated_at FROM notes WHERE user_id = ? AND (title LIKE ? OR content LIKE ?) ORDER BY updated_at DESC';
-  const wzor = `%${searchTerm}%`;
-  
-  db.all(sql, [userId, wzor, wzor], (err, notatki) => {
-    if (err) {
-      console.error('Błąd wyszukiwania:', err);
-      return res.status(500).json({ success: false, message: 'Błąd wyszukiwania' });
-    }
-    
-    console.log('📋 Znaleziono:', notatki?.length || 0);
-    res.json({ success: true, results: notatki || [], count: notatki?.length || 0 });
   });
 });
 
