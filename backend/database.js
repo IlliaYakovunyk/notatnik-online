@@ -34,7 +34,7 @@ const createUsersTable = () => {
   });
 };
 
-// Tworzenie tabeli notatek (rozszerzona)
+// Tworzenie tabeli notatek
 const createNotesTable = () => {
   const createTableSQL = `
     CREATE TABLE IF NOT EXISTS notes (
@@ -60,19 +60,19 @@ const createNotesTable = () => {
   });
 };
 
-// Tworzenie tabeli współdzielenia
+// Tworzenie tabeli udostępniania notatek (NOWA)
 const createSharedNotesTable = () => {
   const createTableSQL = `
     CREATE TABLE IF NOT EXISTS shared_notes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       note_id INTEGER NOT NULL,
-      shared_with_email TEXT NOT NULL,
+      share_token TEXT UNIQUE NOT NULL,
       can_edit BOOLEAN DEFAULT 0,
-      shared_by INTEGER NOT NULL,
-      shared_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      expires_at DATETIME NOT NULL,
+      created_by INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (note_id) REFERENCES notes (id) ON DELETE CASCADE,
-      FOREIGN KEY (shared_by) REFERENCES users (id) ON DELETE CASCADE,
-      UNIQUE(note_id, shared_with_email)
+      FOREIGN KEY (created_by) REFERENCES users (id) ON DELETE CASCADE
     )
   `;
 
@@ -85,11 +85,45 @@ const createSharedNotesTable = () => {
   });
 };
 
+// Tworzenie indeksów dla wydajności
+const createIndexes = () => {
+  const indexes = [
+    'CREATE INDEX IF NOT EXISTS idx_shared_notes_token ON shared_notes(share_token)',
+    'CREATE INDEX IF NOT EXISTS idx_shared_notes_expires ON shared_notes(expires_at)',
+    'CREATE INDEX IF NOT EXISTS idx_notes_user_id ON notes(user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_notes_updated_at ON notes(updated_at)'
+  ];
+
+  indexes.forEach(indexSQL => {
+    db.run(indexSQL, (err) => {
+      if (err) {
+        console.error('❌ Błąd tworzenia indeksu:', err.message);
+      }
+    });
+  });
+};
+
 // Inicjalizacja bazy danych
 const initDatabase = () => {
   createUsersTable();
   createNotesTable();
   createSharedNotesTable();
+  createIndexes();
+  
+  // Czyści wygasłe linki co godzinę
+  setInterval(cleanExpiredShares, 60 * 60 * 1000);
+};
+
+// Funkcja czyszcząca wygasłe linki
+const cleanExpiredShares = () => {
+  const sql = 'DELETE FROM shared_notes WHERE expires_at <= CURRENT_TIMESTAMP';
+  db.run(sql, function(err) {
+    if (err) {
+      console.error('❌ Błąd czyszczenia wygasłych linków:', err.message);
+    } else if (this.changes > 0) {
+      console.log(`🧹 Usunięto ${this.changes} wygasłych linków`);
+    }
+  });
 };
 
 // Funkcje pomocnicze dla użytkowników
@@ -181,6 +215,7 @@ module.exports = {
   db,
   initDatabase,
   closeDB,
+  cleanExpiredShares,
   // Funkcje użytkowników
   findUserByEmail,
   findUserById,

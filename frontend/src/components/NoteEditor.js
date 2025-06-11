@@ -1,47 +1,63 @@
-import React, { useState, useEffect, useRef } from 'react';
-import axios from 'axios';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import MDEditor from '@uiw/react-md-editor';
+import '@uiw/react-md-editor/markdown-editor.css';
+import 'highlight.js/styles/github.css';
 
-const BeautifulNoteEditor = ({ note, onSave, onCancel }) => {
+const EnhancedNoteEditor = ({ note, onSave, onCancel }) => {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
+  const [previewMode, setPreviewMode] = useState('edit');
   const [wordCount, setWordCount] = useState({ words: 0, characters: 0, lines: 0 });
   const [lastSaved, setLastSaved] = useState(null);
-  const [focusMode, setFocusMode] = useState(false);
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
+  const [darkMode, setDarkMode] = useState(false);
+  const [showMetadata, setShowMetadata] = useState(false);
 
-  const contentRef = useRef(null);
   const titleRef = useRef(null);
+  const autoSaveInterval = useRef(null);
+  const saveTimeoutRef = useRef(null);
 
   const getToken = () => localStorage.getItem('token');
 
+  // Inicializuj dane przy ładowaniu notatki
   useEffect(() => {
     if (note) {
       setTitle(note.title || '');
       setContent(note.content || '');
     } else {
       setTitle('');
-      setContent('');
+      setContent('# Nowa Notatka\n\nZacznij pisać swoją historię...\n\n## Przykładowe formatowanie:\n\n- **Pogrubiony tekst**\n- *Kursywa*\n- `Kod inline`\n\n```javascript\n// Blok kodu\nconsole.log("Hello World!");\n```\n\n> Cytat\n\n### Lista zadań:\n- [ ] Zadanie 1\n- [x] Ukończone zadanie\n- [ ] Zadanie 3');
     }
     setError('');
     setSaved(false);
     setLastSaved(null);
   }, [note]);
 
+  // Oblicz statystyki tekstu
   useEffect(() => {
-    const words = content.trim().split(/\s+/).filter(word => word.length > 0).length;
-    const characters = content.length;
-    const lines = content.split('\n').length;
+    const text = content || '';
+    const words = text.trim().split(/\s+/).filter(word => word.length > 0).length;
+    const characters = text.length;
+    const lines = text.split('\n').length;
     setWordCount({ words, characters, lines });
   }, [content]);
 
-  const saveNote = async (showNotification = true) => {
+  // Focus na tytule przy nowej notatce
+  useEffect(() => {
+    if (!note && titleRef.current) {
+      titleRef.current.focus();
+    }
+  }, [note]);
+
+  // Zapisz notatkę
+  const saveNote = useCallback(async (showNotification = true) => {
     if (!title.trim()) {
       setError('Tytuł notatki jest wymagany');
-      return;
+      return false;
     }
 
     try {
@@ -51,87 +67,116 @@ const BeautifulNoteEditor = ({ note, onSave, onCancel }) => {
 
       if (!token) {
         setError('Brak autoryzacji. Zaloguj się ponownie.');
-        return;
+        return false;
       }
 
-      let response;
-      
-      if (note && note.id) {
-        response = await axios.put(`/api/notes/${note.id}`, {
+      const response = await fetch(note?.id ? `/api/notes/${note.id}` : '/api/notes', {
+        method: note?.id ? 'PUT' : 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
           title: title.trim(),
           content: content.trim()
-        }, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-      } else {
-        response = await axios.post('/api/notes', {
-          title: title.trim(),
-          content: content.trim()
-        }, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-      }
+        })
+      });
 
-      if (response.data.success) {
+      const data = await response.json();
+
+      if (data.success) {
         if (showNotification) {
           setSaved(true);
           setTimeout(() => setSaved(false), 3000);
         }
         setLastSaved(new Date());
-        onSave(response.data.note);
+        onSave(data.note);
+        return true;
+      } else {
+        setError(data.message || 'Błąd zapisywania');
+        return false;
       }
     } catch (error) {
       console.error('Błąd zapisywania notatki:', error);
-      setError(error.response?.data?.message || 'Błąd zapisywania notatki');
+      setError('Błąd połączenia z serwerem');
+      return false;
     } finally {
       setSaving(false);
     }
-  };
+  }, [title, content, note, onSave]);
 
+  // Auto-save funkcjonalność
   useEffect(() => {
-    if (!title && !content) return;
-
-    const autoSaveTimer = setTimeout(() => {
-      if (title.trim() && (note?.id || content.trim())) {
-        saveNote(false);
+    if (autoSaveEnabled && (title.trim() || content.trim())) {
+      // Wyczyść poprzedni timeout
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
       }
-    }, 30000);
 
-    return () => clearTimeout(autoSaveTimer);
-  }, [title, content]);
+      // Ustaw nowy timeout na 30 sekund
+      saveTimeoutRef.current = setTimeout(() => {
+        if (title.trim()) {
+          saveNote(false);
+        }
+      }, 30000);
+    }
 
-  const handleKeyDown = (e) => {
-    if (e.ctrlKey && e.key === 's') {
-      e.preventDefault();
-      saveNote();
-    }
-    
-    if (e.ctrlKey && e.key === 'b') {
-      e.preventDefault();
-      insertFormatting('**', '**');
-    }
-    
-    if (e.ctrlKey && e.key === 'i') {
-      e.preventDefault();
-      insertFormatting('*', '*');
-    }
-    
-    if (e.key === 'F11') {
-      e.preventDefault();
-      setIsFullscreen(!isFullscreen);
-    }
-    
-    if (e.key === 'Escape') {
-      if (isFullscreen) {
-        setIsFullscreen(false);
-      } else if (focusMode) {
-        setFocusMode(false);
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
       }
-    }
-  };
+    };
+  }, [title, content, autoSaveEnabled, saveNote]);
 
-  const insertFormatting = (before, after, placeholder = 'tekst') => {
-    const textarea = contentRef.current;
+  // Skróty klawiszowe
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.ctrlKey || e.metaKey) {
+        switch (e.key) {
+          case 's':
+            e.preventDefault();
+            saveNote();
+            break;
+          case 'b':
+            e.preventDefault();
+            insertMarkdown('**', '**', 'pogrubiony tekst');
+            break;
+          case 'i':
+            e.preventDefault();
+            insertMarkdown('*', '*', 'kursywa');
+            break;
+          case 'k':
+            e.preventDefault();
+            insertMarkdown('[', '](URL)', 'tekst linku');
+            break;
+          case 'Enter':
+            if (e.shiftKey) {
+              e.preventDefault();
+              saveNote();
+            }
+            break;
+        }
+      }
+
+      if (e.key === 'F11') {
+        e.preventDefault();
+        setIsFullscreen(!isFullscreen);
+      }
+
+      if (e.key === 'Escape') {
+        if (isFullscreen) {
+          setIsFullscreen(false);
+        }
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [saveNote, isFullscreen]);
+
+  // Wstaw formatowanie Markdown
+  const insertMarkdown = (before, after, placeholder = 'tekst') => {
+    const textarea = document.querySelector('.w-md-editor-text-textarea');
     if (!textarea) return;
 
     const start = textarea.selectionStart;
@@ -157,7 +202,8 @@ const BeautifulNoteEditor = ({ note, onSave, onCancel }) => {
     }, 0);
   };
 
-  const formatLastSaved = (date) => {
+  // Format daty
+  const formatDate = (date) => {
     if (!date) return '';
     const now = new Date();
     const diff = Math.floor((now - date) / 1000);
@@ -167,353 +213,513 @@ const BeautifulNoteEditor = ({ note, onSave, onCancel }) => {
     return date.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
   };
 
-  const renderMarkdownPreview = (text) => {
-    if (!text) return '<div class="text-gray-400 text-center py-12"><div class="text-4xl mb-4">📝</div><p>Zacznij pisać, aby zobaczyć podgląd</p></div>';
-    
-    return text
-      .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold text-gray-900">$1</strong>')
-      .replace(/\*(.*?)\*/g, '<em class="italic text-gray-700">$1</em>')
-      .replace(/^- (.+)$/gm, '<li class="ml-4 mb-1">• $1</li>')
-      .replace(/^(\d+)\. (.+)$/gm, '<li class="ml-4 mb-1">$1. $2</li>')
-      .replace(/^# (.+)$/gm, '<h1 class="text-3xl font-bold mb-4 mt-6 text-gray-900 border-b-2 border-blue-200 pb-2">$1</h1>')
-      .replace(/^## (.+)$/gm, '<h2 class="text-2xl font-semibold mb-3 mt-5 text-gray-800">$1</h2>')
-      .replace(/^### (.+)$/gm, '<h3 class="text-xl font-medium mb-2 mt-4 text-gray-700">$1</h3>')
-      .replace(/^> (.+)$/gm, '<blockquote class="border-l-4 border-blue-400 pl-4 py-2 my-4 bg-blue-50 italic text-gray-700">$1</blockquote>')
-      .replace(/`([^`]+)`/g, '<code class="bg-gray-100 px-2 py-1 rounded text-sm font-mono text-red-600">$1</code>')
-      .replace(/\n\n/g, '</p><p class="mb-4 text-gray-600 leading-relaxed">')
-      .replace(/\n/g, '<br/>')
-      .replace(/^(.+)$/, '<p class="mb-4 text-gray-600 leading-relaxed">$1</p>');
+  // Eksportuj do różnych formatów
+  const exportNote = async (format) => {
+    try {
+      const timestamp = new Date().toISOString().split('T')[0];
+      const filename = `${title || 'notatka'}_${timestamp}`;
+      
+      switch (format) {
+        case 'markdown':
+          const mdContent = `# ${title}\n\n${content}`;
+          downloadFile(mdContent, `${filename}.md`, 'text/markdown');
+          break;
+          
+        case 'html':
+          // Tu można dodać konwersję markdown -> HTML
+          const htmlContent = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>${title}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+    h1, h2, h3 { color: #333; }
+    code { background: #f4f4f4; padding: 2px 4px; border-radius: 3px; }
+    pre { background: #f4f4f4; padding: 10px; border-radius: 5px; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <h1>${title}</h1>
+  <pre>${content}</pre>
+</body>
+</html>`;
+          downloadFile(htmlContent, `${filename}.html`, 'text/html');
+          break;
+          
+        case 'txt':
+          const txtContent = `${title}\n${'='.repeat(title.length)}\n\n${content}`;
+          downloadFile(txtContent, `${filename}.txt`, 'text/plain');
+          break;
+      }
+    } catch (error) {
+      setError('Błąd eksportu pliku');
+    }
   };
 
-  const toolbarButtons = [
-    { icon: '𝐁', action: () => insertFormatting('**', '**'), title: 'Pogrubienie (Ctrl+B)', style: 'font-bold' },
-    { icon: '𝐼', action: () => insertFormatting('*', '*'), title: 'Kursywa (Ctrl+I)', style: 'italic' },
-    { icon: '—', action: () => insertFormatting('- ', ''), title: 'Lista punktowana' },
-    { icon: '1.', action: () => insertFormatting('1. ', ''), title: 'Lista numerowana' },
-    { icon: 'H₁', action: () => insertFormatting('# ', ''), title: 'Nagłówek główny' },
-    { icon: 'H₂', action: () => insertFormatting('## ', ''), title: 'Podtytuł' },
-    { icon: '""', action: () => insertFormatting('> ', ''), title: 'Cytat' },
-    { icon: '</>', action: () => insertFormatting('`', '`'), title: 'Kod inline' },
-  ];
+  // Pobierz plik
+  const downloadFile = (content, filename, mimeType) => {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Wstaw template
+  const insertTemplate = (templateType) => {
+    const templates = {
+      meeting: `# Spotkanie - ${new Date().toLocaleDateString('pl-PL')}
+
+## Uczestnicy
+- 
+- 
+
+## Agenda
+1. 
+2. 
+3. 
+
+## Notatki
+- 
+
+## Akcje do wykonania
+- [ ] 
+- [ ] 
+
+## Następne kroki
+- `,
+      
+      article: `# Tytuł artykułu
+
+## Wprowadzenie
+Krótkie wprowadzenie do tematu...
+
+## Główna treść
+
+### Podsekcja 1
+Treść...
+
+### Podsekcja 2
+Treść...
+
+## Podsumowanie
+Główne wnioski...
+
+## Źródła
+- [Link 1](URL)
+- [Link 2](URL)`,
+
+      todo: `# Lista zadań - ${new Date().toLocaleDateString('pl-PL')}
+
+## Priorytet wysoki 🔥
+- [ ] 
+- [ ] 
+
+## Priorytet średni ⚡
+- [ ] 
+- [ ] 
+
+## Priorytet niski 📝
+- [ ] 
+- [ ] 
+
+## Ukończone ✅
+- [x] Przykład ukończonego zadania`,
+
+      project: `# Projekt: [Nazwa]
+
+## Opis
+Krótki opis projektu...
+
+## Cele
+- [ ] Cel 1
+- [ ] Cel 2
+- [ ] Cel 3
+
+## Timeline
+- **Faza 1**: Data - Data
+- **Faza 2**: Data - Data
+- **Faza 3**: Data - Data
+
+## Zasoby
+- **Budget**: 
+- **Zespół**: 
+- **Narzędzia**: 
+
+## Postęp
+- [ ] Zadanie 1
+- [ ] Zadanie 2
+- [ ] Zadanie 3`
+    };
+
+    setContent(templates[templateType] || '');
+  };
 
   return (
-    <div 
-      className={`
-        ${isFullscreen ? 'fixed inset-0 z-50' : 'h-full'} 
-        ${focusMode ? 'bg-gray-900' : 'bg-gradient-to-br from-blue-50 via-white to-purple-50'}
-        flex flex-col transition-all duration-500 ease-in-out
-      `}
-      onKeyDown={handleKeyDown} 
-      tabIndex={-1}
-    >
-      {/* Header */}
-      <div className={`
-        ${focusMode ? 'opacity-20 hover:opacity-100' : 'opacity-100'} 
-        ${focusMode ? 'bg-gray-800 text-white' : 'bg-white/80 backdrop-blur-sm'} 
-        border-b transition-all duration-300 ease-in-out shadow-sm
-      `}>
-        <div className="flex justify-between items-center p-4">
-          <div className="flex items-center space-x-4">
-            <div className="flex items-center space-x-3">
-              <div className="w-3 h-3 bg-red-400 rounded-full"></div>
-              <div className="w-3 h-3 bg-yellow-400 rounded-full"></div>
-              <div className="w-3 h-3 bg-green-400 rounded-full"></div>
-            </div>
-            
-            <h2 className={`text-xl font-semibold ${focusMode ? 'text-white' : 'text-gray-800'} transition-colors duration-300`}>
-              {note ? '✏️ Edytuj Notatkę' : '📝 Nowa Notatka'}
-            </h2>
-            
-            {lastSaved && (
-              <div className={`
-                ${saved ? 'scale-110' : 'scale-100'} 
-                transition-all duration-300 ease-out
-                ${focusMode ? 'text-green-400' : 'text-green-600'}
-                text-sm flex items-center space-x-1
-              `}>
-                <span className={`${saved ? 'animate-pulse' : ''}`}>💾</span>
-                <span>Zapisano {formatLastSaved(lastSaved)}</span>
-              </div>
-            )}
-          </div>
-          
-          <div className="flex items-center space-x-2">
-            {saved && (
-              <div className="animate-bounce">
-                <span className="text-green-500 text-sm font-medium bg-green-100 px-3 py-1 rounded-full">
-                  ✅ Zapisano!
-                </span>
-              </div>
-            )}
-            
-            <button
-              onClick={() => setFocusMode(!focusMode)}
-              className={`
-                px-3 py-2 rounded-lg font-medium transition-all duration-300 transform hover:scale-105
-                ${focusMode 
-                  ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/25' 
-                  : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
-                }
-              `}
-              title="Tryb koncentracji"
-            >
-              {focusMode ? '🎯 Focus ON' : '🎯 Focus'}
-            </button>
-            
-            <button
-              onClick={() => setShowPreview(!showPreview)}
-              className={`
-                px-3 py-2 rounded-lg font-medium transition-all duration-300 transform hover:scale-105
-                ${showPreview 
-                  ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/25' 
-                  : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
-                }
-              `}
-            >
-              {showPreview ? '📝 Edycja' : '👁️ Podgląd'}
-            </button>
-            
-            <button
-              onClick={() => setIsFullscreen(!isFullscreen)}
-              className={`
-                px-3 py-2 rounded-lg font-medium transition-all duration-300 transform hover:scale-105
-                ${isFullscreen 
-                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25' 
-                  : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
-                }
-              `}
-              title="Pełny ekran (F11)"
-            >
-              {isFullscreen ? '🗗 Okno' : '🗖 Pełny'}
-            </button>
-            
-            <button
-              onClick={() => saveNote()}
-              disabled={saving || !title.trim()}
-              className={`
-                px-4 py-2 rounded-lg font-medium transition-all duration-300 transform
-                ${saving || !title.trim()
-                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed scale-95'
-                  : 'bg-gradient-to-r from-green-500 to-emerald-600 text-white shadow-lg shadow-green-500/25 hover:shadow-green-500/40 hover:scale-105'
-                }
-              `}
-            >
-              {saving ? (
-                <div className="flex items-center space-x-2">
-                  <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full"></div>
-                  <span>Zapisywanie...</span>
-                </div>
-              ) : (
-                '💾 Zapisz'
-              )}
-            </button>
-            
-            {!isFullscreen && (
-              <button
-                onClick={onCancel}
-                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-all duration-300 transform hover:scale-105"
-              >
-                ❌ Anuluj
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Toolbar formatowania */}
-      {!showPreview && (
+    <>
+      <div 
+        className={`${
+          isFullscreen ? 'fixed inset-0 z-50' : 'h-full'
+        } ${
+          darkMode ? 'bg-gray-900' : 'bg-gray-50'
+        } flex flex-col transition-all duration-300`}
+        data-color-mode={darkMode ? 'dark' : 'light'}
+      >
+        {/* Header */}
         <div className={`
-          ${focusMode ? 'opacity-20 hover:opacity-100 bg-gray-800' : 'bg-white/60 backdrop-blur-sm'} 
-          border-b transition-all duration-300 ease-in-out
+          ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} 
+          border-b shadow-sm transition-all duration-300
         `}>
-          <div className="flex items-center justify-between p-3">
-            <div className="flex items-center space-x-2">
-              {toolbarButtons.map((btn, index) => (
-                <button
-                  key={index}
-                  onClick={btn.action}
-                  className={`
-                    px-3 py-2 rounded-lg font-medium transition-all duration-200 transform hover:scale-110
-                    ${focusMode 
-                      ? 'bg-gray-700 text-white hover:bg-gray-600' 
-                      : 'bg-white text-gray-700 hover:bg-gray-50 shadow-sm hover:shadow-md'
-                    }
-                    ${btn.style || ''}
-                  `}
-                  title={btn.title}
-                >
-                  {btn.icon}
-                </button>
-              ))}
+          <div className="flex justify-between items-center p-4">
+            <div className="flex items-center space-x-4">
+              <h2 className={`text-xl font-semibold ${darkMode ? 'text-white' : 'text-gray-800'}`}>
+                {note ? '✏️ Edytuj Notatkę' : '📝 Nowa Notatka'}
+              </h2>
+              
+              {lastSaved && (
+                <div className={`
+                  ${saved ? 'scale-110 animate-slide-down' : 'scale-100'} 
+                  transition-all duration-300 ease-out
+                  ${darkMode ? 'text-green-400' : 'text-green-600'}
+                  text-sm flex items-center space-x-1
+                `}>
+                  <span className={`${saved ? 'animate-pulse' : ''}`}>💾</span>
+                  <span>Zapisano {formatDate(lastSaved)}</span>
+                </div>
+              )}
             </div>
             
-            <div className={`text-sm ${focusMode ? 'text-gray-400' : 'text-gray-500'} transition-colors duration-300`}>
-              ⌨️ Skróty: Ctrl+S, Ctrl+B, Ctrl+I, F11, Esc
+            <div className="flex items-center space-x-2">
+              {/* Notification */}
+              {saved && (
+                <div className="animate-bounce">
+                  <span className="text-green-500 text-sm font-medium bg-green-100 px-3 py-1 rounded-full">
+                    ✅ Zapisano!
+                  </span>
+                </div>
+              )}
+
+              {/* Templates */}
+              <div className="relative group">
+                <button
+                  className={`
+                    px-3 py-2 rounded-lg font-medium transition-all duration-300
+                    ${darkMode 
+                      ? 'bg-purple-600 text-white hover:bg-purple-700' 
+                      : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+                    }
+                  `}
+                  title="Szablony"
+                >
+                  📋 Szablony
+                </button>
+                
+                <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-lg shadow-lg border opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-10">
+                  <div className="p-2">
+                    {[
+                      { key: 'meeting', label: '🤝 Spotkanie', desc: 'Notatki ze spotkania' },
+                      { key: 'article', label: '📄 Artykuł', desc: 'Struktura artykułu' },
+                      { key: 'todo', label: '✅ Lista zadań', desc: 'Organizacja zadań' },
+                      { key: 'project', label: '🚀 Projekt', desc: 'Plan projektu' }
+                    ].map(template => (
+                      <button
+                        key={template.key}
+                        onClick={() => insertTemplate(template.key)}
+                        className="w-full text-left px-3 py-2 rounded hover:bg-gray-50 transition-colors"
+                      >
+                        <div className="font-medium text-sm">{template.label}</div>
+                        <div className="text-xs text-gray-500">{template.desc}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Export */}
+              <div className="relative group">
+                <button
+                  className={`
+                    px-3 py-2 rounded-lg font-medium transition-all duration-300
+                    ${darkMode 
+                      ? 'bg-blue-600 text-white hover:bg-blue-700' 
+                      : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                    }
+                  `}
+                  title="Eksportuj"
+                >
+                  📤 Eksport
+                </button>
+                
+                <div className="absolute right-0 top-full mt-2 w-40 bg-white rounded-lg shadow-lg border opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-10">
+                  <div className="p-2">
+                    {[
+                      { format: 'markdown', label: '📝 Markdown', ext: '.md' },
+                      { format: 'html', label: '🌐 HTML', ext: '.html' },
+                      { format: 'txt', label: '📄 Tekst', ext: '.txt' }
+                    ].map(export_option => (
+                      <button
+                        key={export_option.format}
+                        onClick={() => exportNote(export_option.format)}
+                        className="w-full text-left px-3 py-2 rounded hover:bg-gray-50 transition-colors text-sm"
+                      >
+                        {export_option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Settings */}
+              <button
+                onClick={() => setAutoSaveEnabled(!autoSaveEnabled)}
+                className={`
+                  px-3 py-2 rounded-lg font-medium transition-all duration-300
+                  ${autoSaveEnabled
+                    ? (darkMode ? 'bg-green-600 text-white' : 'bg-green-100 text-green-700')
+                    : (darkMode ? 'bg-gray-600 text-white' : 'bg-gray-100 text-gray-700')
+                  }
+                `}
+                title={`Auto-zapis: ${autoSaveEnabled ? 'włączony' : 'wyłączony'}`}
+              >
+                {autoSaveEnabled ? '💾 Auto' : '💾 Ręcznie'}
+              </button>
+
+              {/* Dark mode toggle */}
+              <button
+                onClick={() => setDarkMode(!darkMode)}
+                className={`
+                  px-3 py-2 rounded-lg font-medium transition-all duration-300
+                  ${darkMode 
+                    ? 'bg-yellow-600 text-white hover:bg-yellow-700' 
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }
+                `}
+                title="Tryb ciemny"
+              >
+                {darkMode ? '☀️' : '🌙'}
+              </button>
+
+              {/* Fullscreen */}
+              <button
+                onClick={() => setIsFullscreen(!isFullscreen)}
+                className={`
+                  px-3 py-2 rounded-lg font-medium transition-all duration-300
+                  ${isFullscreen 
+                    ? (darkMode ? 'bg-indigo-600 text-white' : 'bg-indigo-100 text-indigo-700')
+                    : (darkMode ? 'bg-gray-600 text-white' : 'bg-gray-100 text-gray-700')
+                  }
+                `}
+                title="Pełny ekran (F11)"
+              >
+                {isFullscreen ? '🗗' : '🗖'}
+              </button>
+              
+              {/* Save button */}
+              <button
+                onClick={() => saveNote()}
+                disabled={saving || !title.trim()}
+                className={`
+                  px-4 py-2 rounded-lg font-medium transition-all duration-300 transform
+                  ${saving || !title.trim()
+                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed scale-95'
+                    : 'bg-gradient-to-r from-green-500 to-emerald-600 text-white shadow-lg hover:scale-105'
+                  }
+                `}
+              >
+                {saving ? (
+                  <div className="flex items-center space-x-2">
+                    <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full"></div>
+                    <span>Zapisywanie...</span>
+                  </div>
+                ) : (
+                  '💾 Zapisz (Ctrl+S)'
+                )}
+              </button>
+              
+              {!isFullscreen && (
+                <button
+                  onClick={onCancel}
+                  className={`
+                    px-4 py-2 rounded-lg font-medium transition-all duration-300
+                    ${darkMode 
+                      ? 'bg-gray-700 hover:bg-gray-600 text-white' 
+                      : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                    }
+                  `}
+                >
+                  ❌ Anuluj
+                </button>
+              )}
             </div>
           </div>
         </div>
-      )}
 
-      {/* Error */}
-      {error && (
-        <div className="animate-slide-down">
-          <div className="mx-4 mt-4 p-4 bg-red-50 border-l-4 border-red-400 text-red-700 rounded-r-lg shadow-sm">
+        {/* Error */}
+        {error && (
+          <div className="mx-4 mt-4 p-4 bg-red-50 border-l-4 border-red-400 text-red-700 rounded-r-lg shadow-sm animate-slide-down">
             <div className="flex items-center">
               <span className="text-xl mr-2">⚠️</span>
               {error}
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Main Content */}
-      <div className="flex-1 p-4 flex flex-col overflow-hidden">
-        {/* Tytuł */}
-        <div className="mb-4">
-          <input
-            ref={titleRef}
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Wprowadź tytuł swojej notatki..."
-            className={`
-              w-full px-6 py-4 text-2xl font-bold rounded-xl border-2 transition-all duration-300
-              ${focusMode 
-                ? 'bg-gray-800 text-white border-gray-600 placeholder-gray-400 focus:border-purple-500' 
-                : 'bg-white/70 backdrop-blur-sm text-gray-800 border-gray-200 placeholder-gray-400 focus:border-blue-500 focus:bg-white'
-              }
-              focus:outline-none focus:ring-4 focus:ring-blue-500/20 shadow-sm focus:shadow-lg transform focus:scale-[1.02]
-            `}
-          />
-        </div>
+        {/* Main Content */}
+        <div className="flex-1 p-4 flex flex-col overflow-hidden">
+          {/* Title */}
+          <div className="mb-4">
+            <input
+              ref={titleRef}
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Wprowadź tytuł swojej notatki..."
+              className={`
+                w-full px-6 py-4 text-2xl font-bold rounded-xl border-2 transition-all duration-300
+                ${darkMode 
+                  ? 'bg-gray-800 text-white border-gray-600 placeholder-gray-400 focus:border-purple-500' 
+                  : 'bg-white text-gray-800 border-gray-200 placeholder-gray-400 focus:border-blue-500'
+                }
+                focus:outline-none focus:ring-4 focus:ring-blue-500/20 shadow-sm focus:shadow-lg
+              `}
+            />
+          </div>
 
-        {/* Treść lub Podgląd */}
-        <div className="flex-1 flex flex-col min-h-0">
-          {showPreview ? (
-            <div className={`
-              flex-1 p-6 rounded-xl overflow-auto transition-all duration-300
-              ${focusMode 
-                ? 'bg-gray-800 text-white' 
-                : 'bg-white/70 backdrop-blur-sm'
-              }
-              border-2 border-gray-200 shadow-sm
-            `}>
-              <div 
-                className="prose prose-lg max-w-none"
-                dangerouslySetInnerHTML={{ 
-                  __html: renderMarkdownPreview(content)
-                }}
-              />
-            </div>
-          ) : (
-            <textarea
-              ref={contentRef}
+          {/* Markdown Editor */}
+          <div className="flex-1 flex flex-col min-h-0">
+            <MDEditor
               value={content}
-              onChange={(e) => setContent(e.target.value)}
-              placeholder="Zacznij pisać swoją historię...
+              onChange={(val) => setContent(val || '')}
+              preview={previewMode}
+              hideToolbar={false}
+              visibleDragBar={false}
+              height={400}
+              data-color-mode={darkMode ? 'dark' : 'light'}
+              textareaProps={{
+                placeholder: `Zacznij pisać swoją notatkę...
 
-✨ Wskazówki formatowania:
-• **tekst** - pogrubienie
-• *tekst* - kursywa  
-• # Nagłówek - główny tytuł
-• ## Podtytuł - mniejszy nagłówek
-• - Lista - punkty
-• > Cytat - wyróżniony tekst
-• `kod` - fragment kodu
+💡 Wskazówki Markdown:
+• **pogrubiony tekst** lub __pogrubiony tekst__
+• *kursywa* lub _kursywa_
+• # Nagłówek H1
+• ## Nagłówek H2
+• ### Nagłówek H3
+• [link](URL)
+• ![obraz](URL)
+• \`kod inline\`
+• > cytat
+• - lista punktowana
+• 1. lista numerowana
+• - [ ] zadanie do wykonania
+• - [x] ukończone zadanie
 
-⌨️ Skróty klawiszowe:
+⌨️ Skróty:
 • Ctrl+S - zapisz
 • Ctrl+B - pogrubienie
 • Ctrl+I - kursywa
-• F11 - pełny ekran
-• Esc - wyjście z trybów"
-              className={`
-                flex-1 w-full p-6 rounded-xl border-2 resize-none transition-all duration-300
-                ${focusMode 
-                  ? 'bg-gray-800 text-white border-gray-600 placeholder-gray-400 focus:border-purple-500' 
-                  : 'bg-white/70 backdrop-blur-sm text-gray-800 border-gray-200 placeholder-gray-400 focus:border-blue-500 focus:bg-white'
+• Ctrl+K - link
+• F11 - pełny ekran`,
+                style: {
+                  fontSize: '16px',
+                  lineHeight: '1.6',
+                  fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
                 }
-                focus:outline-none focus:ring-4 focus:ring-blue-500/20 shadow-sm focus:shadow-lg
-                font-mono text-base leading-relaxed
-              `}
+              }}
             />
-          )}
+          </div>
         </div>
-      </div>
 
-      {/* Status Bar */}
-      <div className={`
-        ${focusMode ? 'opacity-20 hover:opacity-100 bg-gray-800 text-white' : 'bg-white/80 backdrop-blur-sm'} 
-        border-t transition-all duration-300 ease-in-out
-      `}>
-        <div className="p-4">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center space-x-8">
-              <div className="flex items-center space-x-1">
-                <span className="text-2xl">📝</span>
-                <span className="text-sm font-medium">
-                  <span className="text-blue-600 font-bold">{wordCount.words}</span> słów
-                </span>
-              </div>
-              
-              <div className="flex items-center space-x-1">
-                <span className="text-2xl">🔤</span>
-                <span className="text-sm font-medium">
-                  <span className="text-green-600 font-bold">{wordCount.characters}</span> znaków
-                </span>
-              </div>
-              
-              <div className="flex items-center space-x-1">
-                <span className="text-2xl">📏</span>
-                <span className="text-sm font-medium">
-                  <span className="text-purple-600 font-bold">{wordCount.lines}</span> linii
-                </span>
-              </div>
-              
-              {content.length > 0 && (
+        {/* Status Bar */}
+        <div className={`
+          ${darkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-200'} 
+          border-t transition-all duration-300
+        `}>
+          <div className="p-4">
+            <div className="flex justify-between items-center">
+              <div className="flex items-center space-x-8">
                 <div className="flex items-center space-x-1">
-                  <span className="text-2xl">⏱️</span>
+                  <span className="text-2xl">📝</span>
                   <span className="text-sm font-medium">
-                    ~<span className="text-orange-600 font-bold">{Math.ceil(wordCount.words / 200)}</span> min czytania
+                    <span className="text-blue-600 font-bold">{wordCount.words}</span> słów
                   </span>
                 </div>
-              )}
-            </div>
-            
-            <div className={`text-xs ${focusMode ? 'text-gray-400' : 'text-gray-500'} transition-colors duration-300`}>
-              🔄 Auto-zapis aktywny • Ostatnio: {lastSaved ? formatLastSaved(lastSaved) : 'nigdy'}
-            </div>
-          </div>
-          
-          {note && (
-            <div className={`flex justify-between items-center text-xs ${focusMode ? 'text-gray-500' : 'text-gray-400'} mt-3 pt-3 border-t border-gray-200 transition-colors duration-300`}>
-              <div className="flex items-center space-x-4">
-                <span>📅 Utworzona: {new Date(note.created_at).toLocaleDateString('pl-PL', { 
-                  year: 'numeric', 
-                  month: 'long', 
-                  day: 'numeric',
-                  hour: '2-digit',
-                  minute: '2-digit'
-                })}</span>
-                <span>🔄 Aktualizowana: {new Date(note.updated_at).toLocaleDateString('pl-PL', {
-                  month: 'short',
-                  day: 'numeric',
-                  hour: '2-digit',
-                  minute: '2-digit'
-                })}</span>
+                
+                <div className="flex items-center space-x-1">
+                  <span className="text-2xl">🔤</span>
+                  <span className="text-sm font-medium">
+                    <span className="text-green-600 font-bold">{wordCount.characters}</span> znaków
+                  </span>
+                </div>
+                
+                <div className="flex items-center space-x-1">
+                  <span className="text-2xl">📏</span>
+                  <span className="text-sm font-medium">
+                    <span className="text-purple-600 font-bold">{wordCount.lines}</span> linii
+                  </span>
+                </div>
+                
+                {content.length > 0 && (
+                  <div className="flex items-center space-x-1">
+                    <span className="text-2xl">⏱️</span>
+                    <span className="text-sm font-medium">
+                      ~<span className="text-orange-600 font-bold">{Math.ceil(wordCount.words / 200)}</span> min czytania
+                    </span>
+                  </div>
+                )}
+
+                <div className="flex items-center space-x-1">
+                  <span className="text-2xl">{autoSaveEnabled ? '🔄' : '💾'}</span>
+                  <span className="text-sm font-medium">
+                    {autoSaveEnabled ? 'Auto-zapis włączony' : 'Zapis ręczny'}
+                  </span>
+                </div>
               </div>
               
-              <div>
-                💡 Tryb koncentracji dostępny - naciśnij przycisk Focus
+              <div className={`flex items-center space-x-4 text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                <span>💡 Markdown obsługiwany</span>
+                <span>🔄 Ostatnio: {lastSaved ? formatDate(lastSaved) : 'nigdy'}</span>
+                <button
+                  onClick={() => setShowMetadata(!showMetadata)}
+                  className="hover:underline"
+                >
+                  {showMetadata ? '📊 Ukryj info' : '📊 Pokaż info'}
+                </button>
               </div>
             </div>
-          )}
+            
+            {/* Metadata panel */}
+            {showMetadata && note && (
+              <div className={`mt-3 pt-3 border-t border-gray-200 text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'} grid grid-cols-2 gap-4`}>
+                <div>
+                  <span className="font-medium">📅 Utworzona:</span> {new Date(note.created_at).toLocaleString('pl-PL')}
+                </div>
+                <div>
+                  <span className="font-medium">🔄 Zaktualizowana:</span> {new Date(note.updated_at).toLocaleString('pl-PL')}
+                </div>
+                <div>
+                  <span className="font-medium">🆔 ID notatki:</span> {note.id}
+                </div>
+                <div>
+                  <span className="font-medium">📝 Typ:</span> Markdown
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Custom Styles */}
-      <style jsx>{`
-        @keyframes slide-down {
+      {/* Custom CSS Styles */}
+      <style>{`
+        .animate-slide-down {
+          animation: slideDown 0.3s ease-out;
+        }
+
+        @keyframes slideDown {
           from {
             opacity: 0;
             transform: translateY(-10px);
@@ -523,30 +729,9 @@ const BeautifulNoteEditor = ({ note, onSave, onCancel }) => {
             transform: translateY(0);
           }
         }
-        
-        .animate-slide-down {
-          animation: slide-down 0.3s ease-out;
-        }
-        
-        textarea::-webkit-scrollbar {
-          width: 8px;
-        }
-        
-        textarea::-webkit-scrollbar-track {
-          background: transparent;
-        }
-        
-        textarea::-webkit-scrollbar-thumb {
-          background: rgba(156, 163, 175, 0.5);
-          border-radius: 4px;
-        }
-        
-        textarea::-webkit-scrollbar-thumb:hover {
-          background: rgba(156, 163, 175, 0.8);
-        }
       `}</style>
-    </div>
+    </>
   );
 };
 
-export default BeautifulNoteEditor;
+export default EnhancedNoteEditor;

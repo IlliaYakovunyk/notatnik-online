@@ -5,6 +5,7 @@ require('dotenv').config();
 const { initDatabase, closeDB } = require('./database');
 const authRoutes = require('./routes/auth');
 const notesRoutes = require('./routes/notes');
+const sharingRoutes = require('./routes/sharing');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -38,6 +39,7 @@ app.get('/api/health', (req, res) => {
 
 app.use('/api/auth', authRoutes);
 app.use('/api/notes', notesRoutes);
+app.use('/api', sharingRoutes);
 
 app.get('/api/notes-test', (req, res) => {
   res.json({
