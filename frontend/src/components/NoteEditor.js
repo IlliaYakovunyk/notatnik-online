@@ -21,7 +21,12 @@ const EnhancedNoteEditor = ({ note, onSave, onCancel }) => {
   const autoSaveInterval = useRef(null);
   const saveTimeoutRef = useRef(null);
 
-  const getToken = () => localStorage.getItem('token');
+  const getToken = () => {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      return localStorage.getItem('token');
+    }
+    return null;
+  };
 
   // Inicializuj dane przy ładowaniu notatki
   useEffect(() => {
@@ -70,8 +75,11 @@ const EnhancedNoteEditor = ({ note, onSave, onCancel }) => {
         return false;
       }
 
-      const response = await fetch(note?.id ? `/api/notes/${note.id}` : '/api/notes', {
-        method: note?.id ? 'PUT' : 'POST',
+      const apiUrl = note?.id ? `/api/notes/${note.id}` : '/api/notes';
+      const method = note?.id ? 'PUT' : 'POST';
+
+      const response = await fetch(apiUrl, {
+        method: method,
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -82,6 +90,10 @@ const EnhancedNoteEditor = ({ note, onSave, onCancel }) => {
         })
       });
 
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
       const data = await response.json();
 
       if (data.success) {
@@ -90,7 +102,9 @@ const EnhancedNoteEditor = ({ note, onSave, onCancel }) => {
           setTimeout(() => setSaved(false), 3000);
         }
         setLastSaved(new Date());
-        onSave(data.note);
+        if (onSave) {
+          onSave(data.note);
+        }
         return true;
       } else {
         setError(data.message || 'Błąd zapisywania');
@@ -154,6 +168,8 @@ const EnhancedNoteEditor = ({ note, onSave, onCancel }) => {
               e.preventDefault();
               saveNote();
             }
+            break;
+          default:
             break;
         }
       }
@@ -226,7 +242,6 @@ const EnhancedNoteEditor = ({ note, onSave, onCancel }) => {
           break;
           
         case 'html':
-          // Tu można dodać konwersję markdown -> HTML
           const htmlContent = `<!DOCTYPE html>
 <html>
 <head>
@@ -251,23 +266,33 @@ const EnhancedNoteEditor = ({ note, onSave, onCancel }) => {
           const txtContent = `${title}\n${'='.repeat(title.length)}\n\n${content}`;
           downloadFile(txtContent, `${filename}.txt`, 'text/plain');
           break;
+          
+        default:
+          setError('Nieznany format eksportu');
+          break;
       }
     } catch (error) {
+      console.error('Export error:', error);
       setError('Błąd eksportu pliku');
     }
   };
 
   // Pobierz plik
   const downloadFile = (content, filename, mimeType) => {
-    const blob = new Blob([content], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    try {
+      const blob = new Blob([content], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Download error:', error);
+      setError('Błąd pobierania pliku');
+    }
   };
 
   // Wstaw template
@@ -358,6 +383,12 @@ Krótki opis projektu...
     };
 
     setContent(templates[templateType] || '');
+  };
+
+  const handleCancel = () => {
+    if (onCancel) {
+      onCancel();
+    }
   };
 
   return (
@@ -461,13 +492,13 @@ Krótki opis projektu...
                       { format: 'markdown', label: '📝 Markdown', ext: '.md' },
                       { format: 'html', label: '🌐 HTML', ext: '.html' },
                       { format: 'txt', label: '📄 Tekst', ext: '.txt' }
-                    ].map(export_option => (
+                    ].map(exportOption => (
                       <button
-                        key={export_option.format}
-                        onClick={() => exportNote(export_option.format)}
+                        key={exportOption.format}
+                        onClick={() => exportNote(exportOption.format)}
                         className="w-full text-left px-3 py-2 rounded hover:bg-gray-50 transition-colors text-sm"
                       >
-                        {export_option.label}
+                        {exportOption.label}
                       </button>
                     ))}
                   </div>
@@ -543,7 +574,7 @@ Krótki opis projektu...
               
               {!isFullscreen && (
                 <button
-                  onClick={onCancel}
+                  onClick={handleCancel}
                   className={`
                     px-4 py-2 rounded-lg font-medium transition-all duration-300
                     ${darkMode 

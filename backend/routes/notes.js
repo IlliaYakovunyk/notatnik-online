@@ -172,6 +172,202 @@ router.get('/export/json', (req, res) => {
   });
 });
 
+// ПЕРЕМЕСТИЛИ СЮДА: Pobierz notatki z filtrami - ТЕПЕРЬ ПЕРЕД /:id
+router.get('/filter', (req, res) => {
+  const userId = req.user.id;
+  const { favorite, dateFrom, dateTo, sortBy, order } = req.query;
+  
+  let sql = 'SELECT id, title, content, is_favorite, created_at, updated_at FROM notes WHERE user_id = ?';
+  let params = [userId];
+  
+  // Dodaj filtry
+  if (favorite === 'true') {
+    sql += ' AND is_favorite = 1';
+  }
+  
+  if (dateFrom) {
+    sql += ' AND DATE(created_at) >= ?';
+    params.push(dateFrom);
+  }
+  
+  if (dateTo) {
+    sql += ' AND DATE(created_at) <= ?';
+    params.push(dateTo);
+  }
+  
+  // Sortowanie
+  const validSortFields = ['created_at', 'updated_at', 'title'];
+  const validOrders = ['ASC', 'DESC'];
+  
+  const sortField = validSortFields.includes(sortBy) ? sortBy : 'updated_at';
+  const sortOrder = validOrders.includes(order?.toUpperCase()) ? order.toUpperCase() : 'DESC';
+  
+  sql += ` ORDER BY ${sortField} ${sortOrder}`;
+  
+  console.log('🔍 Filtrowanie notatek:', { favorite, dateFrom, dateTo, sortBy, order });
+  
+  db.all(sql, params, (err, notes) => {
+    if (err) {
+      console.error('Błąd filtrowania:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Błąd filtrowania notatek'
+      });
+    }
+    
+    res.json({
+      success: true,
+      notes: notes || [],
+      count: notes?.length || 0,
+      filters: { favorite, dateFrom, dateTo, sortBy, order }
+    });
+  });
+});
+
+// Export notatek do TXT
+router.get('/export/txt', (req, res) => {
+  const userId = req.user.id;
+  
+  console.log('📤 Eksportowanie notatek do TXT dla użytkownika:', userId);
+  
+  const sql = 'SELECT title, content, created_at, updated_at FROM notes WHERE user_id = ? ORDER BY created_at DESC';
+  
+  db.all(sql, [userId], (err, notatki) => {
+    if (err) {
+      console.error('Błąd eksportu TXT:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Błąd eksportu notatek'
+      });
+    }
+    
+    // Tworzenie zawartości pliku TXT
+    let txtContent = `NOTATKI - EKSPORT z ${new Date().toLocaleString('pl-PL')}\n`;
+    txtContent += `Użytkownik: ${req.user.username} (${req.user.email})\n`;
+    txtContent += `Liczba notatek: ${notatki.length}\n`;
+    txtContent += '='.repeat(80) + '\n\n';
+    
+    notatki.forEach((nota, index) => {
+      txtContent += `${index + 1}. ${nota.title}\n`;
+      txtContent += `Utworzona: ${new Date(nota.created_at).toLocaleString('pl-PL')}\n`;
+      txtContent += `Zaktualizowana: ${new Date(nota.updated_at).toLocaleString('pl-PL')}\n`;
+      txtContent += '-'.repeat(50) + '\n';
+      txtContent += nota.content || '(Pusta notatka)';
+      txtContent += '\n\n' + '='.repeat(80) + '\n\n';
+    });
+    
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="notatki_${new Date().toISOString().split('T')[0]}.txt"`);
+    res.send(txtContent);
+    
+    console.log('✅ Wyeksportowano', notatki.length, 'notatek do TXT');
+  });
+});
+
+// Statystyki szczegółowe
+router.get('/stats/detailed', (req, res) => {
+  const userId = req.user.id;
+  
+  const sql = `
+    SELECT 
+      COUNT(*) as total_notes,
+      COUNT(CASE WHEN is_favorite = 1 THEN 1 END) as favorite_notes,
+      COUNT(CASE WHEN DATE(created_at) = DATE('now') THEN 1 END) as notes_today,
+      COUNT(CASE WHEN DATE(created_at) >= DATE('now', '-7 days') THEN 1 END) as notes_this_week,
+      COUNT(CASE WHEN DATE(created_at) >= DATE('now', '-30 days') THEN 1 END) as notes_this_month,
+      COUNT(CASE WHEN DATE(created_at) >= DATE('now', '-1 year') THEN 1 END) as notes_this_year,
+      SUM(LENGTH(content)) as total_characters,
+      AVG(LENGTH(content)) as avg_note_length,
+      MAX(LENGTH(content)) as longest_note,
+      MIN(LENGTH(content)) as shortest_note,
+      COUNT(CASE WHEN LENGTH(content) = 0 THEN 1 END) as empty_notes,
+      MIN(created_at) as first_note_date,
+      MAX(updated_at) as last_update_date
+    FROM notes 
+    WHERE user_id = ?
+  `;
+  
+  db.get(sql, [userId], (err, stats) => {
+    if (err) {
+      console.error('Błąd szczegółowych statystyk:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Błąd pobierania statystyk'
+      });
+    }
+    
+    // Oblicz dodatkowe statystyki
+    const processedStats = {
+      ...stats,
+      avg_note_length: Math.round(stats.avg_note_length || 0),
+      words_total: Math.round((stats.total_characters || 0) / 5), // Przybliżona liczba słów
+      reading_time_minutes: Math.round((stats.total_characters || 0) / 1000), // Przybliżony czas czytania
+      notes_per_day: stats.total_notes && stats.first_note_date ? 
+        Math.round(stats.total_notes / Math.max(1, Math.ceil((new Date() - new Date(stats.first_note_date)) / (1000 * 60 * 60 * 24)))) : 0
+    };
+    
+    res.json({
+      success: true,
+      stats: processedStats
+    });
+  });
+});
+
+// Backup database endpoint (tylko dla development)
+router.get('/backup/create', (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({
+      success: false,
+      message: 'Backup dostępny tylko w trybie development'
+    });
+  }
+  
+  const userId = req.user.id;
+  
+  const sql = `
+    SELECT n.*, u.username, u.email 
+    FROM notes n 
+    JOIN users u ON n.user_id = u.id 
+    WHERE n.user_id = ?
+    ORDER BY n.created_at DESC
+  `;
+  
+  db.all(sql, [userId], (err, notes) => {
+    if (err) {
+      console.error('Błąd tworzenia backupu:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Błąd tworzenia backupu'
+      });
+    }
+    
+    const backup = {
+      created_at: new Date().toISOString(),
+      user: {
+        id: userId,
+        username: notes[0]?.username,
+        email: notes[0]?.email
+      },
+      notes: notes.map(note => ({
+        id: note.id,
+        title: note.title,
+        content: note.content,
+        is_favorite: note.is_favorite,
+        created_at: note.created_at,
+        updated_at: note.updated_at
+      })),
+      stats: {
+        total_notes: notes.length,
+        backup_size: JSON.stringify(notes).length
+      }
+    };
+    
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="backup_${userId}_${new Date().toISOString().split('T')[0]}.json"`);
+    res.json(backup);
+  });
+});
+
 // Pobierz wszystkie notatki użytkownika
 router.get('/', (req, res) => {
   const userId = req.user.id;
@@ -209,7 +405,7 @@ router.get('/', (req, res) => {
   });
 });
 
-// Pobierz konkretną notatkę - TERAZ W ODPOWIEDNIM MIEJSCU
+// Pobierz konkretną notatkę - TERAZ W ODPOWIEDNIM MIEJSCU (OSTATNI)
 router.get('/:id', (req, res) => {
   const noteId = req.params.id;
   const userId = req.user.id;
@@ -419,45 +615,6 @@ router.delete('/:id', (req, res) => {
   });
 });
 
-router.get('/export/txt', (req, res) => {
-  const userId = req.user.id;
-  
-  console.log('📤 Eksportowanie notatek do TXT dla użytkownika:', userId);
-  
-  const sql = 'SELECT title, content, created_at, updated_at FROM notes WHERE user_id = ? ORDER BY created_at DESC';
-  
-  db.all(sql, [userId], (err, notatki) => {
-    if (err) {
-      console.error('Błąd eksportu TXT:', err);
-      return res.status(500).json({
-        success: false,
-        message: 'Błąd eksportu notatek'
-      });
-    }
-    
-    // Tworzenie zawartości pliku TXT
-    let txtContent = `NOTATKI - EKSPORT z ${new Date().toLocaleString('pl-PL')}\n`;
-    txtContent += `Użytkownik: ${req.user.username} (${req.user.email})\n`;
-    txtContent += `Liczba notatek: ${notatki.length}\n`;
-    txtContent += '='.repeat(80) + '\n\n';
-    
-    notatki.forEach((nota, index) => {
-      txtContent += `${index + 1}. ${nota.title}\n`;
-      txtContent += `Utworzona: ${new Date(nota.created_at).toLocaleString('pl-PL')}\n`;
-      txtContent += `Zaktualizowana: ${new Date(nota.updated_at).toLocaleString('pl-PL')}\n`;
-      txtContent += '-'.repeat(50) + '\n';
-      txtContent += nota.content || '(Pusta notatka)';
-      txtContent += '\n\n' + '='.repeat(80) + '\n\n';
-    });
-    
-    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="notatki_${new Date().toISOString().split('T')[0]}.txt"`);
-    res.send(txtContent);
-    
-    console.log('✅ Wyeksportowano', notatki.length, 'notatek do TXT');
-  });
-});
-
 // Bulk operations - oznacz jako ulubione
 router.post('/bulk/favorite', (req, res) => {
   const userId = req.user.id;
@@ -522,162 +679,6 @@ router.post('/bulk/delete', (req, res) => {
       message: `Usunięto ${this.changes} notatek`,
       deletedCount: this.changes
     });
-  });
-});
-
-// Pobierz notatki z filtrami
-router.get('/filter', (req, res) => {
-  const userId = req.user.id;
-  const { favorite, dateFrom, dateTo, sortBy, order } = req.query;
-  
-  let sql = 'SELECT id, title, content, is_favorite, created_at, updated_at FROM notes WHERE user_id = ?';
-  let params = [userId];
-  
-  // Dodaj filtry
-  if (favorite === 'true') {
-    sql += ' AND is_favorite = 1';
-  }
-  
-  if (dateFrom) {
-    sql += ' AND DATE(created_at) >= ?';
-    params.push(dateFrom);
-  }
-  
-  if (dateTo) {
-    sql += ' AND DATE(created_at) <= ?';
-    params.push(dateTo);
-  }
-  
-  // Sortowanie
-  const validSortFields = ['created_at', 'updated_at', 'title'];
-  const validOrders = ['ASC', 'DESC'];
-  
-  const sortField = validSortFields.includes(sortBy) ? sortBy : 'updated_at';
-  const sortOrder = validOrders.includes(order?.toUpperCase()) ? order.toUpperCase() : 'DESC';
-  
-  sql += ` ORDER BY ${sortField} ${sortOrder}`;
-  
-  console.log('🔍 Filtrowanie notatek:', { favorite, dateFrom, dateTo, sortBy, order });
-  
-  db.all(sql, params, (err, notes) => {
-    if (err) {
-      console.error('Błąd filtrowania:', err);
-      return res.status(500).json({
-        success: false,
-        message: 'Błąd filtrowania notatek'
-      });
-    }
-    
-    res.json({
-      success: true,
-      notes: notes || [],
-      count: notes?.length || 0,
-      filters: { favorite, dateFrom, dateTo, sortBy, order }
-    });
-  });
-});
-
-// Statystyki szczegółowe
-router.get('/stats/detailed', (req, res) => {
-  const userId = req.user.id;
-  
-  const sql = `
-    SELECT 
-      COUNT(*) as total_notes,
-      COUNT(CASE WHEN is_favorite = 1 THEN 1 END) as favorite_notes,
-      COUNT(CASE WHEN DATE(created_at) = DATE('now') THEN 1 END) as notes_today,
-      COUNT(CASE WHEN DATE(created_at) >= DATE('now', '-7 days') THEN 1 END) as notes_this_week,
-      COUNT(CASE WHEN DATE(created_at) >= DATE('now', '-30 days') THEN 1 END) as notes_this_month,
-      COUNT(CASE WHEN DATE(created_at) >= DATE('now', '-1 year') THEN 1 END) as notes_this_year,
-      SUM(LENGTH(content)) as total_characters,
-      AVG(LENGTH(content)) as avg_note_length,
-      MAX(LENGTH(content)) as longest_note,
-      MIN(LENGTH(content)) as shortest_note,
-      COUNT(CASE WHEN LENGTH(content) = 0 THEN 1 END) as empty_notes,
-      MIN(created_at) as first_note_date,
-      MAX(updated_at) as last_update_date
-    FROM notes 
-    WHERE user_id = ?
-  `;
-  
-  db.get(sql, [userId], (err, stats) => {
-    if (err) {
-      console.error('Błąd szczegółowych statystyk:', err);
-      return res.status(500).json({
-        success: false,
-        message: 'Błąd pobierania statystyk'
-      });
-    }
-    
-    // Oblicz dodatkowe statystyki
-    const processedStats = {
-      ...stats,
-      avg_note_length: Math.round(stats.avg_note_length || 0),
-      words_total: Math.round((stats.total_characters || 0) / 5), // Przybliżona liczba słów
-      reading_time_minutes: Math.round((stats.total_characters || 0) / 1000), // Przybliżony czas czytania
-      notes_per_day: stats.total_notes && stats.first_note_date ? 
-        Math.round(stats.total_notes / Math.max(1, Math.ceil((new Date() - new Date(stats.first_note_date)) / (1000 * 60 * 60 * 24)))) : 0
-    };
-    
-    res.json({
-      success: true,
-      stats: processedStats
-    });
-  });
-});
-
-// Backup database endpoint (tylko dla development)
-router.get('/backup/create', (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(403).json({
-      success: false,
-      message: 'Backup dostępny tylko w trybie development'
-    });
-  }
-  
-  const userId = req.user.id;
-  
-  const sql = `
-    SELECT n.*, u.username, u.email 
-    FROM notes n 
-    JOIN users u ON n.user_id = u.id 
-    WHERE n.user_id = ?
-    ORDER BY n.created_at DESC
-  `;
-  
-  db.all(sql, [userId], (err, notes) => {
-    if (err) {
-      console.error('Błąd tworzenia backupu:', err);
-      return res.status(500).json({
-        success: false,
-        message: 'Błąd tworzenia backupu'
-      });
-    }
-    
-    const backup = {
-      created_at: new Date().toISOString(),
-      user: {
-        id: userId,
-        username: notes[0]?.username,
-        email: notes[0]?.email
-      },
-      notes: notes.map(note => ({
-        id: note.id,
-        title: note.title,
-        content: note.content,
-        is_favorite: note.is_favorite,
-        created_at: note.created_at,
-        updated_at: note.updated_at
-      })),
-      stats: {
-        total_notes: notes.length,
-        backup_size: JSON.stringify(notes).length
-      }
-    };
-    
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename="backup_${userId}_${new Date().toISOString().split('T')[0]}.json"`);
-    res.json(backup);
   });
 });
 
