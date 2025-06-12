@@ -1,12 +1,22 @@
 import React, { useState, useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route, useParams, Navigate } from 'react-router-dom';
 import Login from './components/Login';
 import Layout from './components/Layout';
 import DashboardView from './components/DashboardView';
 import NotesList from './components/NotesList';
 import NoteEditor from './components/NoteEditor';
 import SearchView from './components/SearchView';
+import ShareNotesView from './components/ShareNotesView';
+import SharedNoteViewer from './components/SharedNoteViewer';
 
-const App = () => {
+// Komponent dla udostępnionych notatek z parametrem URL
+const SharedNoteRoute = () => {
+  const { token } = useParams();
+  return <SharedNoteViewer token={token} />;
+};
+
+// Główny komponent aplikacji
+const AppContent = () => {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
@@ -19,13 +29,16 @@ const App = () => {
     const token = localStorage.getItem('token');
     const userData = localStorage.getItem('user');
     
+    console.log('🔍 Sprawdzanie autoryzacji przy starcie...');
+    
     if (token && userData) {
       try {
         const parsedUser = JSON.parse(userData);
         setUser(parsedUser);
         setIsLoggedIn(true);
+        console.log('✅ Użytkownik zalogowany:', parsedUser.username);
       } catch (error) {
-        console.error('Błąd parsowania danych użytkownika:', error);
+        console.error('❌ Błąd parsowania danych użytkownika:', error);
         localStorage.removeItem('token');
         localStorage.removeItem('user');
       }
@@ -36,7 +49,7 @@ const App = () => {
   // Pokaż powiadomienie
   const showNotification = (message, type = 'success') => {
     setNotification({ message, type });
-    setTimeout(() => setNotification(null), 3000);
+    setTimeout(() => setNotification(null), 4000);
   };
 
   // Obsługa logowania
@@ -134,55 +147,18 @@ const App = () => {
       
       case 'shared':
         return (
-          <div className="bg-white rounded-lg p-8 text-center">
-            <div className="text-6xl mb-4">👥</div>
-            <h2 className="text-xl font-semibold mb-2">Udostępnione notatki</h2>
-            <p className="text-gray-500">Funkcja współdzielenia będzie dostępna w następnej wersji</p>
-          </div>
+          <ShareNotesView 
+            onViewChange={handleViewChange}
+          />
         );
       
       case 'settings':
         return (
-          <div className="bg-white rounded-lg p-8">
-            <h2 className="text-xl font-semibold mb-4">⚙️ Ustawienia</h2>
-            <div className="space-y-4">
-              <div className="border-b pb-4">
-                <h3 className="font-medium mb-2">Informacje o aplikacji</h3>
-                <div className="text-sm text-gray-600 space-y-1">
-                  <p>Wersja: 1.0.0</p>
-                  <p>Autor: Node.js Developer Course</p>
-                  <p>Technologie: React + Node.js + SQLite</p>
-                </div>
-              </div>
-              
-              <div className="border-b pb-4">
-                <h3 className="font-medium mb-2">Konto użytkownika</h3>
-                <div className="text-sm text-gray-600 space-y-1">
-                  <p>Nazwa: {user?.username}</p>
-                  <p>Email: {user?.email}</p>
-                  <p>ID: {user?.id}</p>
-                </div>
-              </div>
-              
-              <div>
-                <h3 className="font-medium mb-2">Akcje</h3>
-                <div className="space-y-2">
-                  <button
-                    onClick={() => handleViewChange('export')}
-                    className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded transition-colors"
-                  >
-                    📤 Eksportuj notatki
-                  </button>
-                  <button
-                    onClick={handleLogout}
-                    className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded transition-colors ml-2"
-                  >
-                    🚪 Wyloguj się
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
+          <SettingsView 
+            user={user}
+            onViewChange={handleViewChange}
+            onLogout={handleLogout}
+          />
         );
       
       case 'export':
@@ -263,7 +239,51 @@ const App = () => {
   );
 };
 
-// Export View Component
+// Komponent ustawień
+const SettingsView = ({ user, onViewChange, onLogout }) => (
+  <div className="bg-white rounded-lg p-8">
+    <h2 className="text-xl font-semibold mb-4">⚙️ Ustawienia</h2>
+    <div className="space-y-4">
+      <div className="border-b pb-4">
+        <h3 className="font-medium mb-2">Informacje o aplikacji</h3>
+        <div className="text-sm text-gray-600 space-y-1">
+          <p>Wersja: 1.0.0</p>
+          <p>Autor: Illia Yakovunyk</p>
+          <p>Technologie: React + Node.js + SQLite</p>
+        </div>
+      </div>
+      
+      <div className="border-b pb-4">
+        <h3 className="font-medium mb-2">Konto użytkownika</h3>
+        <div className="text-sm text-gray-600 space-y-1">
+          <p>Nazwa: {user?.username}</p>
+          <p>Email: {user?.email}</p>
+          <p>ID: {user?.id}</p>
+        </div>
+      </div>
+      
+      <div>
+        <h3 className="font-medium mb-2">Akcje</h3>
+        <div className="space-y-2">
+          <button
+            onClick={() => onViewChange('export')}
+            className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded transition-colors"
+          >
+            📤 Eksportuj notatki
+          </button>
+          <button
+            onClick={onLogout}
+            className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded transition-colors ml-2"
+          >
+            🚪 Wyloguj się
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+);
+
+// Komponent eksportu
 const ExportView = ({ onBack }) => {
   const [exporting, setExporting] = useState(false);
   const [exportResult, setExportResult] = useState(null);
@@ -272,7 +292,7 @@ const ExportView = ({ onBack }) => {
     setExporting(true);
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`/api/notes/export/${format}`, {
+      const response = await fetch(`/api/export/${format}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
@@ -375,6 +395,21 @@ const ExportView = ({ onBack }) => {
         </div>
       </div>
     </div>
+  );
+};
+
+// Główny komponent z routingiem
+const App = () => {
+  return (
+    <Router>
+      <Routes>
+        {/* Udostępnione notatki - publiczny dostęp */}
+        <Route path="/shared/:token" element={<SharedNoteRoute />} />
+        
+        {/* Główna aplikacja */}
+        <Route path="/*" element={<AppContent />} />
+      </Routes>
+    </Router>
   );
 };
 
