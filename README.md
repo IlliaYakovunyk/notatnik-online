@@ -305,7 +305,7 @@ Licencja MIT - zobacz plik LICENSE dla szczegółów
 
 ## 👨‍💻 Autor
 
-**Illia Yakovunyk** - Full Stack Developer
+**Illia Yakovunyk** 19328
 
 ## 🙋‍♂️ Wsparcie
 
